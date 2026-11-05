@@ -11,15 +11,22 @@ A simple Node.js Express application.
 - `GET /health`
 
 ## Current Release
-v2.3.0
-Production Deployment
+v2.3.0 - release candidate for production, awaiting approval.
+
+Release documentation: [release/RELEASE_READINESS.md](release/RELEASE_READINESS.md)
+(version, deployment strategy, rollback strategy, infrastructure decision, approval checklist,
+validation summary).
+
+Pipeline: `validate-release` -> `build-image` -> `deploy-production` (main only, requires
+approval of the `production` environment). Check the release configuration locally with
+`bash scripts/validate-release.sh`.
 
 ## Getting Started
 
 ### Clone
 ```bash
-git clone https://github.com/kalvium-devops/release-readiness-lab.git
-cd release-readiness-lab
+git clone https://github.com/kalviumcommunity/release-readiness-labs.git
+cd release-readiness-labs
 ```
 
 ### Install
@@ -51,8 +58,8 @@ Make your changes and push them back to the repository.
 ├── deployment/
 │   ├── kubernetes/
 │   └── terraform/
-├── release/
-├── scripts/
+├── release/            version, approvals, rollback plan, release readiness pack
+├── scripts/            deploy.sh, rollback.sh, validate-release.sh
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
