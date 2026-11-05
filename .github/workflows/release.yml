@@ -1,33 +1,177 @@
 name: Release Pipeline
 
+# validate-release  ->  build-image  ->  deploy-production
+# Each stage must succeed before the next one starts. Production deployment runs only
+# for pushes to main and only after a reviewer approves the "production" environment.
+
 on:
   push:
     branches:
       - main
+      - investigation/release-readiness # lab branch: runs validation + build, never deploys
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Least privilege: jobs get read-only access to repo contents unless they ask for more.
+permissions:
+  contents: read
+
+# One pipeline run per ref at a time. Never cancel a run midway: a half-finished
+# deployment is worse than a queued one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # = bash -eo pipefail
 
 jobs:
-  deploy-production:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Deploy to Production
-        run: |
-          chmod +x scripts/deploy.sh
-          ./scripts/deploy.sh
-
+  # ---------------------------------------------------------------------------------------
+  # Stage 1: prove the code and the release configuration are valid. Nothing is built or
+  # deployed unless this passes.
+  # ---------------------------------------------------------------------------------------
   validate-release:
+    name: Validate release
     runs-on: ubuntu-latest
-    needs: deploy-production
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Run Tests
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies (locked)
+        run: npm ci --prefix app
+
+      - name: Run tests
+        run: npm test --prefix app
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high --prefix app
+
+      - name: Check shell scripts parse
         run: |
-          echo "Running validation tests..."
-          npm install --prefix app
-          npm test --prefix app
-          echo "Validation complete - some tests failed because deployment config has errors"
-          exit 1
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Validate release configuration
+        run: bash scripts/validate-release.sh
+
+  # ---------------------------------------------------------------------------------------
+  # Stage 2: build the one image that will be released, tag it with the release version,
+  # smoke-test the exact image, and record what was built.
+  # ---------------------------------------------------------------------------------------
+  build-image:
+    name: Build and smoke-test image
+    runs-on: ubuntu-latest
+    needs: validate-release
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read release version
+        run: |
+          echo "VERSION=$(jq -r .Version release/release.json)" >> "$GITHUB_ENV"
+          echo "IMAGE=$(jq -r .Image release/release.json)" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg VERSION="$VERSION" \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --tag "$IMAGE" .
+
+      - name: Smoke-test the image
+        run: |
+          docker run -d --name orderflow-smoke -p 3000:3000 "$IMAGE"
+          trap 'docker logs orderflow-smoke; docker rm -f orderflow-smoke' EXIT
+          body=""
+          for _ in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:3000/health)"; then break; fi
+            sleep 1
+          done
+          echo "health: $body"
+          test "$(jq -r .status <<<"$body")" = "ok"
+          test "$(jq -r .version <<<"$body")" = "$VERSION"
+          test "$(jq -r .commit <<<"$body")" = "$GITHUB_SHA"
+
+      - name: Record release manifest
+        run: |
+          jq -n \
+            --arg version "$VERSION" \
+            --arg image "$IMAGE" \
+            --arg image_id "$(docker image inspect "$IMAGE" --format '{{.Id}}')" \
+            --arg commit "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            '{version: $version, image: $image, image_id: $image_id, commit: $commit, ref: $ref, run_id: $run_id}' \
+            | tee release-manifest.json
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manifest
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------------------
+  # Stage 3: production deployment. Requires BOTH previous stages, runs only from main, and
+  # pauses for approval because it targets the protected "production" environment
+  # (Settings > Environments > production > Required reviewers).
+  # ---------------------------------------------------------------------------------------
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write # short-lived AWS credentials via OIDC; only requested when DEPLOY_ENABLED=true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Live deployment is opt-in: set the environment variable DEPLOY_ENABLED=true on the
+      # "production" environment once the cluster and role below exist. Until then the
+      # deploy step is a dry run.
+      - name: Configure AWS credentials (OIDC, no static keys)
+        if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Configure cluster access
+        if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+        env:
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Deploy to production
+        env:
+          DRY_RUN: ${{ vars.DEPLOY_ENABLED == 'true' && 'false' || 'true' }}
+          GIT_SHA: ${{ github.sha }}
+          API_KEY: ${{ secrets.API_KEY }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+        run: bash scripts/deploy.sh
