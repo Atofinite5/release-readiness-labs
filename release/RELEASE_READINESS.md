@@ -119,11 +119,26 @@ Checks run locally on the release candidate:
 | Docker build + `/health` smoke test | pass - reports version `2.3.0` and the build commit |
 | Container runs as non-root; SIGTERM shuts down cleanly | pass (uid 1000; exit 0) |
 
-GitHub Actions run: _pending - recorded below after the pipeline has run on this branch._
+Checks run by GitHub Actions on the release candidate (commit `9e34b2c`, branch
+`investigation/release-readiness`) - [run 41970560377](https://github.com/Atofinite5/release-readiness-labs/actions/runs/41970560377):
 
-**Not verified (cannot be, in this repository):** a live deployment, the live rollback path
-(`kubectl` commands are unexecuted - the scripts' dry-run paths are what was exercised), and the EKS
-apply (`terraform validate` checks syntax, not that the plan applies in your AWS account).
+| Job | Result |
+|---|---|
+| `validate-release` | success - locked install, tests, audit, script syntax, release-config validation |
+| `build-image` | success - image built, `/health` smoke test passed, release manifest uploaded |
+| `deploy-production` | skipped - by design, it runs only for pushes to `main` after reviewer approval |
+
+The commit after `9e34b2c` pins the runner image to `ubuntu-24.04` (the `ubuntu-latest` label was announced
+to migrate to Ubuntu 26) and records this summary; the pipeline re-runs on it - see the Actions tab.
+
+Also exercised locally: the `deploy.sh` dry run, its refusal to deploy `latest` or an image/version
+mismatch, and the `rollback.sh` dry runs (previous revision and explicit version).
+
+**Not verified (cannot be, in this repository):** a live deployment; the live rollback path (the
+`kubectl` commands are unexecuted - only the dry-run paths and guards were exercised); the
+`deploy-production` job itself and the reviewer approval gate (they need a push to `main` and a
+configured `production` environment); and the EKS apply (`terraform validate` checks syntax, not that
+the plan applies in your AWS account).
 
 ## 7. Risks found and how they were fixed
 
@@ -138,7 +153,7 @@ apply (`terraform validate` checks syntax, not that the plan applies in your AWS
 | 7 | `rollback.yml` empty, `rollback.sh` a stub | No way back | Documented strategy, executable `rollback.sh`, automatic rollback on a failed rollout |
 | 8 | Single EC2 `t2.micro` in Terraform | Single point of failure; incompatible with the manifests | EKS (section 4) |
 | 9 | `approvals.yml` empty | No approval record | Pending record + checklist (section 5) |
-| 10 | Unpinned actions (`@v3`), no `permissions`, no timeouts | Supply-chain and over-privilege risk | Actions pinned to commit SHAs, `contents: read`, timeouts, no persisted credentials |
+| 10 | Unpinned actions (`@v3`), floating `ubuntu-latest`, no `permissions`, no timeouts | Supply-chain and over-privilege risk; runner changes without a commit | Actions pinned to commit SHAs, runner pinned to `ubuntu-24.04`, `contents: read`, timeouts, no persisted credentials |
 | 11 | Node 18 image (end-of-life), root user, `npm install`, `npm start` as PID 1 | Unpatched runtime; slow/unclean shutdowns | Node 24 LTS, non-root, `npm ci`, `node` as PID 1 with SIGTERM handler, healthcheck |
 
 **Action required if the removed credentials were ever real:** they remain in git history. Rotate them;

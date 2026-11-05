@@ -3,3 +3,9 @@ environment: production
 version: 2.3.0
 approval: pending
 rollback: documented
+validation:
+  result: passed            # validate-release and build-image succeeded
+  pipeline_run: https://github.com/Atofinite5/release-readiness-labs/actions/runs/41970560377
+  commit: 9e34b2c
+  deploy_production: not run   # runs only on main, after reviewer approval
+  details: release/RELEASE_READINESS.md#6-deployment-validation-summary
