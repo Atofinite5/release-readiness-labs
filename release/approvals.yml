@@ -1,3 +1,37 @@
-approvedBy: 
-reviewDate: 
-releaseManager: 
+# Production approval record for OrderFlow 2.3.0.
+#
+# Enforcement: the deploy job runs in the GitHub Environment "production", which must be
+# configured with required reviewers (Settings > Environments > production). GitHub then
+# blocks the deploy job until a reviewer approves it. This file is the audit record.
+release: 2.3.0
+status: pending-approval        # pending-approval | approved | rejected
+
+# Filled in by the humans who sign off. Left PENDING on purpose: an approval must come
+# from the approver, not from the person preparing the release.
+approvedBy: PENDING             # Engineering Manager
+reviewDate: PENDING             # YYYY-MM-DD
+releaseManager: PENDING
+
+checklist:
+  # Verified by the pipeline on every run
+  - item: Unit/smoke tests pass (npm test)
+    done: true
+  - item: Release configuration validated (scripts/validate-release.sh)
+    done: true
+  - item: Container image builds and passes /health smoke test
+    done: true
+  - item: Release version is identical in package.json, release.json, config and manifests
+    done: true
+  - item: No plaintext secrets or floating image tags in the repository
+    done: true
+  - item: Rollback strategy and target version documented
+    done: true
+  # Requires a human
+  - item: Environment "production" configured with required reviewers
+    done: false
+  - item: GitHub Environment secrets API_KEY and DATABASE_PASSWORD created
+    done: false
+  - item: Previous production version confirmed as rollback target (rollback.yml)
+    done: false
+  - item: Engineering Manager approval recorded above
+    done: false

@@ -1,2 +1,17 @@
-rollback_strategy: 
-target_version: 
+# Rollback plan for OrderFlow 2.3.0. Executable via scripts/rollback.sh.
+rollback_strategy: >-
+  Primary: `kubectl rollout undo deployment/orderflow` restores the previous ReplicaSet
+  (zero-downtime, uses revisionHistoryLimit: 10). Fallback: redeploy the pinned previous
+  image tag (target_version) with `scripts/rollback.sh <target_version>`.
+target_version: 1.0.0
+automatic_trigger: rollout does not become ready within rollout_timeout (scripts/deploy.sh rolls back by itself)
+manual_triggers:
+  - /health failing or version mismatch after deploy
+  - error rate or latency regression reported by monitoring
+  - decision of the release manager
+steps:
+  - "Run: ./scripts/rollback.sh              # undo to the previous revision"
+  - "Or:  ./scripts/rollback.sh 1.0.0        # pin an explicit known-good version"
+  - "Verify: kubectl rollout status deployment/orderflow and GET /health reports the target version"
+  - "Record the incident and re-open release/approvals.yml before retrying"
+data_notes: No database migrations exist in this repository, so rollback needs no data restore. Re-check this if a migration is added before release.

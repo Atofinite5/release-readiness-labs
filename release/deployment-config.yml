@@ -1,7 +1,40 @@
+# Deployment configuration for OrderFlow production.
+# NEVER put secret values in this file. Only secret *names* are listed below.
+application: orderflow
 environment: production
-image_tag: production-build
+version: 2.3.0
+
+image:
+  repository: orderflow
+  # Immutable release version. Never "latest" or a floating tag like "production-build":
+  # a floating tag cannot be traced to a version and cannot be rolled back deterministically.
+  tag: 2.3.0
+  pull_policy: IfNotPresent
+
+infrastructure:
+  platform: kubernetes        # Amazon EKS, provisioned by deployment/terraform
+  manifests: deployment/kubernetes
+  decision: release/RELEASE_READINESS.md#4-infrastructure-decision
+
+strategy:
+  type: rolling-update
+  replicas: 3
+  max_unavailable: 0          # old pods stay up until new pods pass the readiness probe
+  max_surge: 1
+  rollout_timeout: 300s
+  auto_rollback_on_failed_rollout: true
+
+approval:
+  required: true
+  mechanism: GitHub Environment "production" with required reviewers
+  record: release/approvals.yml
+
 secrets:
-  API_KEY: ${API_KEY}
-  DATABASE_PASSWORD: password123
-  TOKEN: abcd1234
-  AWS_SECRET: test-secret
+  # Values live in the GitHub "production" Environment secrets (CI) and in the
+  # Kubernetes Secret below (runtime). They are injected at deploy time, never committed.
+  kubernetes_secret: orderflow-secrets
+  required:
+    - API_KEY
+    - DATABASE_PASSWORD
+  # Removed: TOKEN (referenced nowhere) and AWS_SECRET (static cloud keys are not used;
+  # CI authenticates to AWS with short-lived OIDC credentials).

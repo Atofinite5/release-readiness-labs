@@ -1,24 +1,74 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: lab-app
+  name: orderflow
+  labels:
+    app: orderflow
+    app.kubernetes.io/name: orderflow
+    app.kubernetes.io/version: "2.3.0"
 spec:
   replicas: 3
+  revisionHistoryLimit: 10          # keeps old ReplicaSets so `kubectl rollout undo` works
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0             # never drop below 3 ready pods during a release
+      maxSurge: 1
   selector:
     matchLabels:
-      app: lab-app
+      app: orderflow
   template:
     metadata:
       labels:
-        app: lab-app
+        app: orderflow
+        app.kubernetes.io/version: "2.3.0"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-      - name: lab-app
-        image: lab-app:production-build
+      - name: orderflow
+        # Immutable release tag. Must equal release/release.json (checked by scripts/validate-release.sh).
+        image: orderflow:2.3.0
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
         env:
+        # Secret values are NEVER stored in this file. They come from the Kubernetes Secret
+        # "orderflow-secrets", which scripts/deploy.sh creates from GitHub Environment secrets.
         - name: API_KEY
-          value: "test-api-key-1234"
+          valueFrom:
+            secretKeyRef:
+              name: orderflow-secrets
+              key: API_KEY
         - name: DATABASE_PASSWORD
-          value: "password123"
+          valueFrom:
+            secretKeyRef:
+              name: orderflow-secrets
+              key: DATABASE_PASSWORD
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]

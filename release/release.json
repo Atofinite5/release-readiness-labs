@@ -1,5 +1,9 @@
 {
-  "Version": "1.0",
-  "ReleaseDate": "2024-01-01",
+  "Application": "OrderFlow",
+  "Version": "2.3.0",
+  "GitTag": "v2.3.0",
+  "Image": "orderflow:2.3.0",
+  "PreviousVersion": "1.0.0",
+  "ReleaseDate": "2026-11-05",
   "Author": "DevOps Team"
 }
